@@ -1,64 +1,68 @@
-# 🥷 Summaraii: Cut the Clutter, Keep the Core
+### 🗡️ Summaraii
 
-*Summaraii* is a powerful web application that empowers content creators by summarizing relevant information from various reference sources. Whether you're dealing with web URLs, PDFs, or plain text documents, Summaraii leverages advanced Language Learning Models (LLMs) to generate concise summaries tailored to the specific topic or title you provide.
+Cut the Clutter, Keep the Core.
 
-### ⚔️Access Summaraii at: [Summaraii.app](https://summaraii.streamlit.app/)
+Summaraii is a Streamlit app that helps creators quickly extract topic-relevant insights from YouTube videos, websites, and PDFs. It filters each source by your topic first, then summarizes only what matters using an LLM backed by Groq.
 
-# ✨ Features
+Production demo: `https://summaraii.streamlit.app/`
 
-* ⛓️**Multiple Input Types:** Seamlessly handle multiple URLs, PDFs, and text documents.
-* 🎯**Topic-Focused Summaries:** Extract and summarize content that directly aligns with your given topic or title.
-* ⚡**Efficient Data Extraction:** Eliminate irrelevant information, leaving you with only the key points that matter.
-* 👩‍💻**User-Friendly Interface:** Streamlined workflow - input your sources, specify a topic, and receive your summary in a read-only editor.
+### Features
 
- # 🚀 Getting Started
+- **Multi‑source input:** YouTube URLs, website URLs, and PDFs.
+- **Topic filtering first:** Content is filtered by your topic before summarization.
+- **LLM‑powered summaries:** Uses Groq Gemma2‑9b‑It via LangChain.
+- **Clean UI:** Streamlit app with a two‑column layout and status messaging.
 
-_To run the Summaraii application locally, follow these simple steps:_
+### Quickstart
 
- # 📋 Prerequisites
+Prerequisites:
+- Python 3.9+
+- A Groq API key
 
-**Ensure you have the following installed on your machine:**
+Clone and install:
+```bash
+git clone https://github.com/<your-org-or-user>/Summaraii.git
+cd Summaraii
+python -m venv .venv && .venv\Scripts\activate  # on Windows PowerShell: .venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
 
-* 🐍 Python 3.8 or later
-* 📦 Required Python packages (listed in `requirements.txt`)
+Configure environment:
+- In the app sidebar you can paste your key each run, or create a `.env` file with:
+```bash
+GROQ_API_KEY=your_groq_api_key
+```
 
- # 🔧 Installation
+Run the app:
+```bash
+streamlit run cs.py
+```
+Open `http://localhost:8501` in your browser.
 
-1. **Clone the repository:**
+### Usage
+- Enter a topic in the sidebar.
+- Optionally add YouTube and website URLs (one per line) and/or upload PDFs.
+- Click “Summarize Content”. The app filters by topic and displays a combined summary.
 
-   ```bash
-   git clone [invalid URL removed]
-   cd summaraii
-   ```
-2. **Install dependencies:**
-    ```bash
-   pip install -r requirements.txt
-   ```
-3. **Set up your environment variables:**
-   Create a .env file and provide the necessary API keys and environment variables for LLM and summarization:
-   ```bash
-   GROQ_API_KEY=<your_groq_api_key>
-   ```
+### Configuration
+- Model: `Gemma2-9b-It` via `langchain-groq`.
+- Chunking: `RecursiveCharacterTextSplitter` with 5000/500.
+- Filtering: simple regex match of your topic (case‑insensitive) before summarization.
 
- # 🏃‍♂️ Running the Application
+### Development
+Recommended commands:
+```bash
+# Lint (optional: add flake8/ruff to your env first)
+python -m pip install ruff flake8
+ruff check . || true
+flake8 || true
 
- 1. **▶️Run the Streamlit app:**
-   ```bash
-   streamlit run cs.py
-   ```
- 2. **Access the application:**
+# Run Streamlit
+streamlit run cs.py
+```
 
-After running, navigate to the URL provided by Streamlit (typically http://localhost:8501/) to interact with Summaraii.
+### Contributing
+Contributions are welcome! Please read `CONTRIBUTING.md` and follow the code of conduct in `CODE_OF_CONDUCT.md`. For security issues, see `SECURITY.md`.
 
-# 🛠️ Usage
-* 📂 Input Sources: Upload multiple URLs, PDFs, or text documents.
-* 📝 Provide Topic/Title: Enter a specific topic or title related to the content.
-* ✨ Generate Summary: Summaraii extracts and summarizes relevant data, presenting the information in a read-only editor.
-* ⚠️ Error Handling
-* ❌ No Relevant Content: If a source doesn’t contain relevant content, the app will issue a warning, and irrelevant data will be excluded from the summary.
-* 🤝 Contributing
-
-_Feel free to submit pull requests and suggestions to improve Summaraii. Please ensure all code submissions adhere to the contribution guidelines._
-
-# 📄 License
-This project is licensed under the MIT License - see the LICENSE file for details.
+### License
+MIT License. See `LICENSE`.
