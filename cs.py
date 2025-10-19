@@ -139,15 +139,53 @@ Content: {text}
 """
 prompt = PromptTemplate(template=prompt_template, input_variables=["text", "topic"])
 
+# Helper function to validate URLs and return validation results
+def validate_urls(url_text, url_type="URL"):
+    if not url_text.strip():
+        return True, [], []  # Valid if empty
+    
+    urls = [url.strip() for url in url_text.split("\n") if url.strip()]
+    valid_urls = []
+    invalid_urls = []
+    
+    for url in urls:
+        if url_type == "YouTube" and "youtube.com" not in url:
+            invalid_urls.append(f"{url} (not a YouTube URL)")
+        elif not validators.url(url):
+            invalid_urls.append(f"{url} (invalid URL format)")
+        else:
+            valid_urls.append(url)
+    
+    is_valid = len(invalid_urls) == 0
+    return is_valid, valid_urls, invalid_urls
+
 # Layout for inputs using columns
 col1, col2 = st.columns([2, 1])
 
 with col1:
     st.subheader("📺 YouTube Video URLs")
     video_urls = st.text_area("Enter YouTube Video URLs (one per line)", placeholder="e.g. https://www.youtube.com/watch?v=dQw4w9WgXcQ" ,height=30)
+    
+    # Validate YouTube URLs and show feedback
+    video_valid, video_valid_urls, video_invalid_urls = validate_urls(video_urls, "YouTube")
+    if video_urls.strip() and not video_valid:
+        st.error("❌ Invalid YouTube URLs detected:")
+        for invalid_url in video_invalid_urls:
+            st.error(f"• {invalid_url}")
+    elif video_urls.strip() and video_valid:
+        st.success(f"✅ {len(video_valid_urls)} valid YouTube URL(s)")
 
     st.subheader("🌐 Website URLs")
     website_urls = st.text_area("Enter Website URLs (one per line)", placeholder="e.g. https://www.example.com", height=30)
+    
+    # Validate Website URLs and show feedback
+    website_valid, website_valid_urls, website_invalid_urls = validate_urls(website_urls, "Website")
+    if website_urls.strip() and not website_valid:
+        st.error("❌ Invalid Website URLs detected:")
+        for invalid_url in website_invalid_urls:
+            st.error(f"• {invalid_url}")
+    elif website_urls.strip() and website_valid:
+        st.success(f"✅ {len(website_valid_urls)} valid Website URL(s)")
 
     st.subheader("📃 Upload PDFs")
     uploaded_files = st.file_uploader("Choose PDF files", type="pdf", accept_multiple_files=True)
@@ -199,8 +237,20 @@ def clean_text(text):
     text = re.sub(r'[^\x00-\x7F]+', ' ', text)
     return text
 
+# Check if all inputs are valid
+all_urls_valid = video_valid and website_valid
+has_content = (video_urls.strip() or website_urls.strip() or uploaded_files)
+can_summarize = all_urls_valid and has_content
+
+# Show helpful message when button is disabled
+if not can_summarize:
+    if not all_urls_valid:
+        st.warning("⚠️ Please fix invalid URLs before summarizing")
+    elif not has_content:
+        st.info("ℹ️ Please provide at least one URL or upload a PDF to summarize")
+
 # Button to trigger summarization
-if st.button("Summarize Content", key="summarize"):
+if st.button("Summarize Content", key="summarize", disabled=not can_summarize):
     # Validate Groq API Key
     if not groq_api_key.strip():
         st.error("Please provide the API key.")
@@ -212,9 +262,8 @@ if st.button("Summarize Content", key="summarize"):
     combined_documents = []
 
     # Summarize YouTube Videos
-    if video_urls.strip():
-        video_urls_list = [url.strip() for url in video_urls.split("\n") if validators.url(url) and "youtube.com" in url]
-        for url in video_urls_list:
+    if video_urls.strip() and video_valid:
+        for url in video_valid_urls:
             try:
                 loader = YoutubeLoader.from_youtube_url(url, add_video_info=True)
                 docs = loader.load()
@@ -229,9 +278,8 @@ if st.button("Summarize Content", key="summarize"):
                 st.error(f"Error with {url}: {e}. Maybe try giving a video with Subtitles🤔 ")
 
     # Summarize Websites
-    if website_urls.strip():
-        website_urls_list = [url.strip() for url in website_urls.split("\n") if validators.url(url)]
-        for url in website_urls_list:
+    if website_urls.strip() and website_valid:
+        for url in website_valid_urls:
             content = fetch_website_content(url)
             if content:
                 filtered_content = filter_content(content, search_query)
