@@ -1,23 +1,44 @@
-langchain 
-llama-index 
-streamlit 
-datasets 
-transformers 
-boto3 
-flask
-langchain-community
-langchain
+# Core dependencies
 streamlit
-python-dotenv
-ipykernel
+langchain
 langchain-community
+langchain-openai
+langchain-groq
+langchain-anthropic
+langchain-google-genai
+langchain-text-splitters
+
+# Content processing
 pypdf
 bs4
+validators==0.28.1
+youtube_transcript_api
+unstructured
+pytube
+
+# Enhanced content processing
+scikit-learn
+numpy
+requests
+
+# Optional dependencies for advanced features
+openai
+anthropic
+google-generativeai
+
+# UI and utilities
+python-dotenv
+streamlit-extras
+
+# Legacy dependencies (keeping for compatibility)
+datasets
+transformers
+boto3
+flask
+ipykernel
 arxiv
 pymupdf
 wikipedia
-langchain-text-splitters
-langchain-openai
 chromadb
 sentence_transformers
 langchain_huggingface
@@ -25,21 +46,11 @@ faiss-cpu
 langchain_chroma
 duckdb
 pandas
-openai
-langchain-groq
 duckduckgo_search==5.3.1b1
-pymupdf
-arxiv
-wikipedia
 mysql-connector-python
 SQLAlchemy
-validators==0.28.1
-youtube_transcript_api
-unstructured
-pytube
 numexpr
 huggingface_hub
-streamlit-extras
 
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.3.0+cpu

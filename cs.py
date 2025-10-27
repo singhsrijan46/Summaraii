@@ -1,15 +1,223 @@
 import streamlit as st
 from langchain.prompts import PromptTemplate
 from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains.summarize import load_summarize_chain
 from langchain_community.document_loaders import PyPDFLoader, YoutubeLoader
-from bs4 import BeautifulSoup
+from langchain_community.embeddings import OpenAIEmbeddings, HuggingFaceEmbeddings
 from langchain.schema import Document
+from bs4 import BeautifulSoup
 import validators
 import requests
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import re
 import os
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import json
+from typing import Dict, List, Optional, Tuple
+
+# Model Configuration and Pricing
+MODEL_CONFIG = {
+    "groq": {
+        "Gemma2-9b-It": {"cost_per_1k_tokens": 0.0001, "max_tokens": 8192},
+        "Llama-3.1-70b": {"cost_per_1k_tokens": 0.0002, "max_tokens": 8192},
+        "Mixtral-8x7b": {"cost_per_1k_tokens": 0.0001, "max_tokens": 8192}
+    },
+    "openai": {
+        "gpt-3.5-turbo": {"cost_per_1k_tokens": 0.0015, "max_tokens": 4096},
+        "gpt-4": {"cost_per_1k_tokens": 0.03, "max_tokens": 8192},
+        "gpt-4-turbo": {"cost_per_1k_tokens": 0.01, "max_tokens": 128000}
+    },
+    "anthropic": {
+        "claude-3-sonnet": {"cost_per_1k_tokens": 0.003, "max_tokens": 200000},
+        "claude-3-opus": {"cost_per_1k_tokens": 0.015, "max_tokens": 200000}
+    },
+    "google": {
+        "gemini-pro": {"cost_per_1k_tokens": 0.0005, "max_tokens": 30720}
+    }
+}
+
+class LLMProvider:
+    """Abstract base class for LLM providers"""
+    
+    def __init__(self, provider_type: str, api_key: str, model_name: str):
+        self.provider_type = provider_type
+        self.api_key = api_key
+        self.model_name = model_name
+        self.llm = None
+        self._initialize_llm()
+    
+    def _initialize_llm(self):
+        """Initialize the LLM based on provider type"""
+        try:
+            if self.provider_type == "groq":
+                self.llm = ChatGroq(model=self.model_name, groq_api_key=self.api_key)
+            elif self.provider_type == "openai":
+                self.llm = ChatOpenAI(model=self.model_name, openai_api_key=self.api_key)
+            elif self.provider_type == "anthropic":
+                self.llm = ChatAnthropic(model=self.model_name, anthropic_api_key=self.api_key)
+            elif self.provider_type == "google":
+                self.llm = ChatGoogleGenerativeAI(model=self.model_name, google_api_key=self.api_key)
+            else:
+                raise ValueError(f"Unsupported provider type: {self.provider_type}")
+        except Exception as e:
+            st.error(f"Failed to initialize {self.provider_type} model {self.model_name}: {e}")
+            raise
+    
+    def summarize(self, content: str, topic: str, options: Dict = None) -> str:
+        """Summarize content using the configured model"""
+        try:
+            prompt_template = """
+            Given the topic "{topic}", summarize the key information relevant to the topic from the following content.
+            Focus on the most important and relevant points. Be concise but comprehensive.
+            
+            Content: {text}
+            
+            Summary:
+            """
+            prompt = PromptTemplate(template=prompt_template, input_variables=["text", "topic"])
+            
+            chain = load_summarize_chain(self.llm, chain_type="stuff", prompt=prompt)
+            summary = chain.run(input_documents=[Document(page_content=content)], topic=topic)
+            return summary
+        except Exception as e:
+            st.error(f"Error during summarization with {self.provider_type}: {e}")
+            raise
+    
+    def get_cost_estimate(self, content_length: int) -> float:
+        """Estimate cost for processing content"""
+        if self.provider_type in MODEL_CONFIG and self.model_name in MODEL_CONFIG[self.provider_type]:
+            cost_per_1k = MODEL_CONFIG[self.provider_type][self.model_name]["cost_per_1k_tokens"]
+            # Rough estimation: 1 token ≈ 4 characters
+            estimated_tokens = content_length / 4
+            return (estimated_tokens / 1000) * cost_per_1k
+        return 0.0
+
+class EnhancedContentProcessor:
+    """Enhanced content processing with semantic filtering"""
+    
+    def __init__(self, filtering_strategy: str = "semantic"):
+        self.filtering_strategy = filtering_strategy
+        self.vectorizer = None
+        self.topic_embedding = None
+    
+    def filter_content_semantic(self, content: str, topic: str, threshold: float = 0.3) -> str:
+        """Filter content using semantic similarity"""
+        try:
+            # Initialize TF-IDF vectorizer
+            if self.vectorizer is None:
+                self.vectorizer = TfidfVectorizer(stop_words='english', max_features=1000)
+            
+            # Split content into sentences
+            sentences = re.split(r'[.!?]+', content)
+            sentences = [s.strip() for s in sentences if s.strip()]
+            
+            if len(sentences) < 2:
+                return content
+            
+            # Create TF-IDF matrix
+            all_texts = sentences + [topic]
+            tfidf_matrix = self.vectorizer.fit_transform(all_texts)
+            
+            # Calculate similarity between topic and each sentence
+            topic_vector = tfidf_matrix[-1]  # Last vector is the topic
+            sentence_vectors = tfidf_matrix[:-1]  # All vectors except the last
+            
+            similarities = cosine_similarity(topic_vector, sentence_vectors)[0]
+            
+            # Filter sentences based on similarity threshold
+            relevant_sentences = []
+            for i, similarity in enumerate(similarities):
+                if similarity >= threshold:
+                    relevant_sentences.append(sentences[i])
+            
+            return '\n'.join(relevant_sentences) if relevant_sentences else content
+            
+        except Exception as e:
+            st.warning(f"Semantic filtering failed, falling back to regex: {e}")
+            return self.filter_content_regex(content, topic)
+    
+    def filter_content_regex(self, content: str, topic: str) -> str:
+        """Original regex-based filtering"""
+        if topic:
+            pattern = re.compile(re.escape(topic), re.IGNORECASE)
+            filtered = "\n".join([line for line in content.split('\n') if pattern.search(line)])
+            return filtered
+        return content
+    
+    def filter_content(self, content: str, topic: str, threshold: float = 0.3) -> str:
+        """Main filtering method with strategy selection"""
+        if self.filtering_strategy == "semantic":
+            return self.filter_content_semantic(content, topic, threshold)
+        else:
+            return self.filter_content_regex(content, topic)
+    
+    def extract_keywords(self, content: str, num_keywords: int = 10) -> List[str]:
+        """Extract key terms from content"""
+        try:
+            if self.vectorizer is None:
+                self.vectorizer = TfidfVectorizer(stop_words='english', max_features=1000)
+            
+            tfidf_matrix = self.vectorizer.fit_transform([content])
+            feature_names = self.vectorizer.get_feature_names_out()
+            
+            # Get top TF-IDF scores
+            scores = tfidf_matrix.toarray()[0]
+            top_indices = np.argsort(scores)[-num_keywords:][::-1]
+            
+            return [feature_names[i] for i in top_indices if scores[i] > 0]
+        except Exception as e:
+            st.warning(f"Keyword extraction failed: {e}")
+            return []
+
+class ModelManager:
+    """Manages multiple LLM providers and handles fallbacks"""
+    
+    def __init__(self):
+        self.providers = {}
+        self.primary_provider = None
+    
+    def add_provider(self, provider_type: str, api_key: str, model_name: str, is_primary: bool = False):
+        """Add a new provider"""
+        try:
+            provider = LLMProvider(provider_type, api_key, model_name)
+            self.providers[f"{provider_type}_{model_name}"] = provider
+            
+            if is_primary or self.primary_provider is None:
+                self.primary_provider = provider
+                
+            return True
+        except Exception as e:
+            st.error(f"Failed to add provider {provider_type}: {e}")
+            return False
+    
+    def summarize_with_fallback(self, content: str, topic: str, options: Dict = None) -> Tuple[str, str]:
+        """Summarize with automatic fallback to other providers"""
+        providers_to_try = [self.primary_provider] + [p for p in self.providers.values() if p != self.primary_provider]
+        
+        for provider in providers_to_try:
+            if provider is None:
+                continue
+                
+            try:
+                summary = provider.summarize(content, topic, options)
+                return summary, f"{provider.provider_type}_{provider.model_name}"
+            except Exception as e:
+                st.warning(f"Provider {provider.provider_type} failed: {e}")
+                continue
+        
+        raise Exception("All providers failed to generate summary")
+    
+    def get_cost_estimates(self, content_length: int) -> Dict[str, float]:
+        """Get cost estimates for all available providers"""
+        estimates = {}
+        for name, provider in self.providers.items():
+            estimates[name] = provider.get_cost_estimate(content_length)
+        return estimates
 
 # SVG code
 svg_code = '''
@@ -182,32 +390,70 @@ st.markdown(f'''
     </div>
 ''', unsafe_allow_html=True)
 
-# Sidebar for Groq API Key and Search Query
+# Sidebar for Multi-Model Configuration and Search Query
 with st.sidebar:
     st.markdown(f'<div style="text-align: center;">{svg_code}</div>', unsafe_allow_html=True)
     st.header("Summaraii")
     st.markdown("Summarize reference content for content creators")
-    st.subheader("API Configuration")
-    groq_api_key = st.text_input("Groq API Key", value="", type="password", placeholder="Enter Groq API Key here", help="Get your free API key from https://console.groq.com/")
-    st.subheader("Topic")
+    
+    # Model Selection
+    st.subheader("🤖 Model Configuration")
+    model_provider = st.selectbox(
+        "Choose Provider",
+        ["groq", "openai", "anthropic", "google"],
+        help="Select your preferred LLM provider"
+    )
+    
+    # Dynamic model selection based on provider
+    if model_provider == "groq":
+        model_name = st.selectbox("Groq Model", ["Gemma2-9b-It", "Llama-3.1-70b", "Mixtral-8x7b"])
+        api_key = st.text_input("Groq API Key", value="", type="password", placeholder="Enter Groq API Key", help="Get your free API key from https://console.groq.com/")
+    elif model_provider == "openai":
+        model_name = st.selectbox("OpenAI Model", ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo"])
+        api_key = st.text_input("OpenAI API Key", value="", type="password", placeholder="Enter OpenAI API Key", help="Get your API key from https://platform.openai.com/")
+    elif model_provider == "anthropic":
+        model_name = st.selectbox("Anthropic Model", ["claude-3-sonnet", "claude-3-opus"])
+        api_key = st.text_input("Anthropic API Key", value="", type="password", placeholder="Enter Anthropic API Key", help="Get your API key from https://console.anthropic.com/")
+    elif model_provider == "google":
+        model_name = st.selectbox("Google Model", ["gemini-pro"])
+        api_key = st.text_input("Google API Key", value="", type="password", placeholder="Enter Google API Key", help="Get your API key from https://makersuite.google.com/")
+    
+    # Advanced Options
+    st.subheader("⚙️ Advanced Options")
+    filtering_strategy = st.selectbox(
+        "Content Filtering",
+        ["semantic", "regex"],
+        help="Semantic filtering uses AI to find relevant content, regex uses keyword matching"
+    )
+    
+    similarity_threshold = st.slider(
+        "Similarity Threshold",
+        min_value=0.1,
+        max_value=0.9,
+        value=0.3,
+        step=0.1,
+        help="Higher values = more strict filtering (only very relevant content)"
+    )
+    
+    show_cost_estimate = st.checkbox("Show Cost Estimates", value=True, help="Display estimated costs before processing")
+    
+    # Topic Input
+    st.subheader("🎯 Topic")
     search_query = st.text_input("Enter the Topic/Title", placeholder="e.g. Python", help="This will be used to filter relevant content from your sources")
+    
+    # About Section
     st.subheader("About Summaraii")
     st.markdown("**Summaraii** delivers a concise summary, focusing only on relevant data, just like a samurai cuts down to the essentials.")
+    
     st.subheader("Tips for Best Results:")
     st.markdown("""
                 1. Ensure that the URLs and PDFs you provide contain content relevant to the topic you've specified.
                 2. If a URL or PDF does not contain relevant content, Summaraii will notify you.
                 3. For optimal summaries, make sure to provide clear and specific topics.
+                4. Try different models to find the best fit for your content type.
             """)
 
-# Gemma Model Using Groq API - will be initialized when needed
-
-# Prompt Template for Summarization
-prompt_template = """
-Given the topic "{topic}", summarize the key information relevant to the topic from the following content:
-Content: {text}
-"""
-prompt = PromptTemplate(template=prompt_template, input_variables=["text", "topic"])
+# Legacy prompt template - now handled by LLMProvider class
 
 # Helper function to validate URLs and return validation results
 def validate_urls(url_text, url_type="URL"):
@@ -292,14 +538,7 @@ def fetch_website_content(url):
         st.error(f"Error fetching website content: {e}")
         return None
 
-# Function to filter content based on search query
-def filter_content(content, query):
-    if query:
-        # Case insensitive search for query in content
-        pattern = re.compile(re.escape(query), re.IGNORECASE)
-        filtered = "\n".join([line for line in content.split('\n') if pattern.search(line)])
-        return filtered
-    return content
+# Legacy function - now handled by EnhancedContentProcessor
 
 # Helper function to clean text
 def clean_text(text):
@@ -310,12 +549,12 @@ def clean_text(text):
 # Check if all inputs are valid
 all_urls_valid = video_valid and website_valid
 has_content = (video_urls.strip() or website_urls.strip() or uploaded_files)
-can_summarize = all_urls_valid and has_content and groq_api_key.strip() and search_query.strip()
+can_summarize = all_urls_valid and has_content and api_key.strip() and search_query.strip()
 
 # Show helpful message when button is disabled
 if not can_summarize:
-    if not groq_api_key.strip():
-        st.warning("Please provide your Groq API key to continue")
+    if not api_key.strip():
+        st.warning("Please provide your API key to continue")
     elif not search_query.strip():
         st.warning("Please provide a topic to search for")
     elif not all_urls_valid:
@@ -323,18 +562,55 @@ if not can_summarize:
     elif not has_content:
         st.info("Please provide at least one URL or upload a PDF to summarize")
 
+# Cost estimation display
+if show_cost_estimate and has_content and api_key.strip():
+    st.subheader("💰 Cost Estimation")
+    
+    # Calculate total content length for estimation
+    total_content_length = 0
+    if video_urls.strip() and video_valid:
+        total_content_length += len(video_urls) * 1000  # Rough estimate
+    if website_urls.strip() and website_valid:
+        total_content_length += len(website_urls) * 500  # Rough estimate
+    if uploaded_files:
+        total_content_length += sum(len(f.getvalue()) for f in uploaded_files)
+    
+    if total_content_length > 0:
+        # Create a temporary provider for cost estimation
+        try:
+            temp_provider = LLMProvider(model_provider, api_key, model_name)
+            estimated_cost = temp_provider.get_cost_estimate(total_content_length)
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Estimated Cost", f"${estimated_cost:.4f}")
+            with col2:
+                st.metric("Content Length", f"{total_content_length:,} chars")
+            with col3:
+                st.metric("Model", f"{model_provider}/{model_name}")
+        except Exception as e:
+            st.warning(f"Could not estimate cost: {e}")
+
 # Button to trigger summarization
 if st.button("Summarize Content", key="summarize", disabled=not can_summarize):
-    # Validate Groq API Key
-    if not groq_api_key.strip():
+    # Validate API Key
+    if not api_key.strip():
         st.error("Please provide the API key.")
         st.stop()
     if not search_query.strip():
         st.error("Please provide topic to search.")
         st.stop()
 
-    # Initialize LLM with API key
-    llm = ChatGroq(model="Gemma2-9b-It", groq_api_key=groq_api_key)
+    # Initialize enhanced content processor
+    content_processor = EnhancedContentProcessor(filtering_strategy=filtering_strategy)
+    
+    # Initialize model manager and provider
+    model_manager = ModelManager()
+    success = model_manager.add_provider(model_provider, api_key, model_name, is_primary=True)
+    
+    if not success:
+        st.error(f"Failed to initialize {model_provider} model {model_name}")
+        st.stop()
     
     # Initialize progress tracking
     progress_bar = st.progress(0)
@@ -364,10 +640,15 @@ if st.button("Summarize Content", key="summarize", disabled=not can_summarize):
                 loader = YoutubeLoader.from_youtube_url(url, add_video_info=True)
                 docs = loader.load()
                 content = "\n".join([doc.page_content for doc in docs])
-                filtered_content = filter_content(content, search_query)
+                filtered_content = content_processor.filter_content(content, search_query, similarity_threshold)
                 if filtered_content:
                     cleaned_docs = [Document(page_content=clean_text(filtered_content))]
                     combined_documents.extend(cleaned_docs)
+                    
+                    # Extract keywords for better context
+                    keywords = content_processor.extract_keywords(filtered_content, 5)
+                    if keywords:
+                        st.info(f"Key terms found in {url[:30]}...: {', '.join(keywords)}")
                 else:
                     st.warning(f"No relevant content found in the Youtube Video {url} for the query: {search_query}")
             except Exception as e:
@@ -382,10 +663,15 @@ if st.button("Summarize Content", key="summarize", disabled=not can_summarize):
             status_text.text(f"Processing website {i+1}/{len(website_valid_urls)}: {url[:50]}...")
             content = fetch_website_content(url)
             if content:
-                filtered_content = filter_content(content, search_query)
+                filtered_content = content_processor.filter_content(content, search_query, similarity_threshold)
                 if filtered_content:
                     cleaned_content = clean_text(filtered_content)
                     combined_documents.append(Document(page_content=cleaned_content))
+                    
+                    # Extract keywords for better context
+                    keywords = content_processor.extract_keywords(filtered_content, 5)
+                    if keywords:
+                        st.info(f"Key terms found in {url[:30]}...: {', '.join(keywords)}")
                 else:
                     st.warning(f"No relevant content found on {url} for the query: {search_query}")
             
@@ -408,13 +694,19 @@ if st.button("Summarize Content", key="summarize", disabled=not can_summarize):
             found_relevant_content = False  # Flag to track if relevant content is found
 
             for doc in docs:
-                filtered_content = filter_content(doc.page_content, search_query)
+                filtered_content = content_processor.filter_content(doc.page_content, search_query, similarity_threshold)
                 if filtered_content:
                     combined_documents.append(Document(page_content=clean_text(filtered_content)))
                     found_relevant_content = True  # Set flag to True when relevant content is found
 
             if not found_relevant_content:
                 st.warning(f"No relevant content found in {pdf_title} for the search query: {search_query}")
+            else:
+                # Extract keywords for better context
+                pdf_content = "\n".join([doc.page_content for doc in docs])
+                keywords = content_processor.extract_keywords(pdf_content, 5)
+                if keywords:
+                    st.info(f"Key terms found in {pdf_title[:30]}...: {', '.join(keywords)}")
             
             # Clean up temporary file
             if os.path.exists(temp_pdf):
@@ -432,15 +724,22 @@ if st.button("Summarize Content", key="summarize", disabled=not can_summarize):
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=5000, chunk_overlap=500)
         splits = text_splitter.split_documents(combined_documents)
 
-        # Summarization process using the Groq API
+        # Summarization process using the selected model with fallback
         summaries = []
-        chain = load_summarize_chain(llm, chain_type="stuff", prompt=prompt)
+        used_model = None
         
         for i, split in enumerate(splits):
             status_text.text(f"Summarizing chunk {i+1}/{len(splits)}...")
             doc_text = clean_text(split.page_content)
-            summary = chain.run(input_documents=[Document(page_content=doc_text)], topic=search_query)
-            summaries.append(summary)
+            
+            try:
+                summary, model_used = model_manager.summarize_with_fallback(doc_text, search_query)
+                summaries.append(summary)
+                if used_model is None:
+                    used_model = model_used
+            except Exception as e:
+                st.error(f"Failed to summarize chunk {i+1}: {e}")
+                summaries.append(f"[Error summarizing chunk {i+1}]")
 
         # Complete progress
         progress_bar.progress(1.0)
@@ -454,13 +753,15 @@ if st.button("Summarize Content", key="summarize", disabled=not can_summarize):
         status_text.empty()
         
         # Show source statistics
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("Total Sources Processed", total_sources)
         with col2:
             st.metric("Relevant Sources Found", len(combined_documents))
         with col3:
             st.metric("Summary Chunks", len(splits))
+        with col4:
+            st.metric("Model Used", used_model or "Unknown")
         
         st.success("Combined Summary of Relevant Sources:")
         
